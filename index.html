@@ -31,10 +31,13 @@
     <div id="map"></div>
     <script>
 
+        let labelLayerId = 'distance-labels';
+
         const map = new maplibregl.Map({
-            container: 'map', // ID элемента HTML, в котором будет отображена карта
+            container: 'map', // ID of the HTML element where the map is displayed
             style: {
                 "version": 8,
+                "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf", // Correct placement of glyphs
                 "sources": {
                     "osm-tiles": {
                         "type": "raster",
@@ -104,15 +107,126 @@
                     'line-width': 8
                 }
             }, ...glDrawLayers);
+
+            map.addLayer({
+                'id': 'circle',
+                'type': 'circle',
+                'source': 'route',
+                'paint': {
+                    'circle-radius': 5,
+                    'circle-color': 'red'
+                }
+
+            }, ...glDrawLayers);
+
+
+            // Add a new source for labels
+            map.addSource(labelLayerId, {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: []
+                }
+            });
+
+            // Add a new layer for labels
+            map.addLayer({
+                id: labelLayerId,
+                type: 'symbol',
+                source: labelLayerId,
+                layout: {
+                    'text-field': ['get', 'distance'],
+                    'text-font': ['Open Sans Regular'],
+                    'text-size': 12,
+                    'text-offset': [0, -0.5],
+                    'text-anchor': 'bottom'
+                },
+                paint: {
+                    'text-color': '#000',
+                    'text-halo-color': '#fff',
+                    'text-halo-width': 2
+                }
+            });
         });
+
+
 
         function updateArea(e) {
             const data = draw.getAll();
             console.log('Drawing updated:', data);
 
-            const chunks = turf.lineChunk(data, 0.004)
+            if (data.features.length > 0) {
+                const line = data.features[0];
 
-            map.getSource('route').setData(chunks);
+                // Create a more precise segmentation
+                const length = turf.length(line, { units: 'kilometers' });
+                const segments = Math.ceil(length / 0.04);
+                const segmentLength = length / segments;
+
+                let segmentedCoordinates = [];
+                let labelFeatures = [];
+                let currentDistance = 0;
+
+                while (currentDistance < length) {
+                    const point = turf.along(line, currentDistance, { units: 'kilometers' });
+                    segmentedCoordinates.push(point.geometry.coordinates);
+
+                    if (segmentedCoordinates.length > 1) {
+                        const midpoint = turf.midpoint(
+                            turf.point(segmentedCoordinates[segmentedCoordinates.length - 2]),
+                            turf.point(segmentedCoordinates[segmentedCoordinates.length - 1])
+                        );
+
+                        labelFeatures.push({
+                            type: 'Feature',
+                            geometry: midpoint.geometry,
+                            properties: {
+                                distance: segmentLength
+                            }
+                        });
+                    }
+
+                    currentDistance += segmentLength;
+                }
+
+                // Ensure the last point of the original line is included
+                const lastCoord = line.geometry.coordinates[line.geometry.coordinates.length - 1];
+                if (segmentedCoordinates[segmentedCoordinates.length - 1] !== lastCoord) {
+                    segmentedCoordinates.push(lastCoord);
+                }
+
+                const segmentedLine = {
+                    type: 'Feature',
+                    properties: {},
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: segmentedCoordinates
+                    }
+                };
+
+                // Update the route source with the segmented line
+                map.getSource('route').setData(segmentedLine);
+
+
+                console.log('labelFeatures', labelFeatures);
+                // Update the label source
+                map.getSource(labelLayerId).setData({
+                    type: 'FeatureCollection',
+                    features: labelFeatures
+                });
+            } else {
+                // Clear the route if no line is drawn
+                map.getSource('route').setData({
+                    'type': 'FeatureCollection',
+                    'features': []
+                });
+
+                // Clear the labels
+                map.getSource(labelLayerId).setData({
+                    type: 'FeatureCollection',
+                    features: []
+                });
+            }
         }
     </script>
 </body>
